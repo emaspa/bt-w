@@ -121,6 +121,7 @@ dependencies = [
  "clap",
  "hidapi",
  "ksni",
+ "libc",
 ]
 
 [[package]]

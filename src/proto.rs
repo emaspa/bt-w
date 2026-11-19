@@ -7,7 +7,9 @@
 use std::fmt;
 
 pub const VID: u16 = 0x041e;
-pub const PID: u16 = 0x3130;
+/// Supported dongles: USB product ID, name, and whether it has been tested on hardware.
+/// The BT-W6 uses the same app and, per user reports, the same commands.
+pub const MODELS: &[(u16, &str, bool)] = &[(0x3130, "BT-W5", true), (0x3132, "BT-W6", false)];
 pub const USAGE_PAGE: u16 = 0xff01;
 pub const REPORT_ID: u8 = 0x03;
 pub const MAGIC: u8 = 0x5a;
@@ -211,6 +213,25 @@ impl ConnEvent {
     }
 }
 
+/// Bluetooth profile and codec on the current link, for display.
+///
+/// The dongle has no codec query. Call mode is state 0x0c; in music mode an aptX
+/// Adaptive link reports its mode (read ID 0x03). Without one the codec is aptX HD,
+/// aptX or SBC, and the dongle doesn't say which.
+pub fn link_description(conn: &ConnEvent, active_mode: Option<u8>) -> Option<String> {
+    if !conn.is_connected() {
+        return None;
+    }
+    if conn.in_call() {
+        return Some("HFP (call audio, mic on)".into());
+    }
+    Some(match active_mode {
+        Some(APTX_LOW_LATENCY) => "A2DP, aptX Adaptive low latency".into(),
+        Some(APTX_HIGH_QUALITY) => "A2DP, aptX Adaptive high quality".into(),
+        _ => "A2DP, codec not reported (aptX HD, aptX or SBC)".into(),
+    })
+}
+
 /// Paired-device slot (`6b .. 02 <slot> <flags> <addr> <name>`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PairedSlot {
@@ -341,6 +362,17 @@ mod tests {
         let e = ConnEvent::parse(&f).unwrap();
         assert_eq!((e.state, &e.peer), (0x07, &None));
         assert_eq!(e.describe(), "idle");
+    }
+
+    #[test]
+    fn link() {
+        let peer = Some(("02:00:11:22:33:44".parse().unwrap(), "Ace".to_string()));
+        let music = ConnEvent { state: 0x0b, peer: peer.clone() };
+        let call = ConnEvent { state: 0x0c, peer };
+        assert_eq!(link_description(&music, Some(0x20)).unwrap(), "A2DP, aptX Adaptive low latency");
+        assert!(link_description(&music, None).unwrap().contains("not reported"));
+        assert!(link_description(&call, Some(0x20)).unwrap().starts_with("HFP"));
+        assert_eq!(link_description(&ConnEvent { state: 0x06, peer: None }, None), None);
     }
 
     #[test]

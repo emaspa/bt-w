@@ -1,8 +1,17 @@
 # btw5
 
-Command-line tool for the Creative BT-W5 Bluetooth audio dongle: switch aptX Adaptive between low latency and high quality, toggle HFP, list and manage pairings, and pair new headsets. No Creative app needed.
+Command-line tool and tray icon for the Creative BT-W5 and BT-W6 Bluetooth audio dongles: switch aptX Adaptive between low latency and high quality, toggle HFP, list and manage pairings, and pair new headsets. No Creative app needed.
 
-It goes through the OS HID driver, hidraw on Linux, so the dongle's media keys keep working. The original Python script detaches that driver instead. The protocol comes from the USB capture in [RaphaelWimmer/btw5-switch](https://github.com/RaphaelWimmer/btw5-switch). I tested every read command, plus mode switching, on a BT-W5 running firmware 1.2.230511.1220. HFP, auto-HFP, scan, connect and forget follow the capture byte for byte but haven't been run against hardware yet.
+It goes through the OS HID driver, hidraw on Linux, so the dongle's media keys keep working. The original Python script detaches that driver instead. The protocol comes from the USB capture in [RaphaelWimmer/btw5-switch](https://github.com/RaphaelWimmer/btw5-switch). I tested it on a BT-W5 running firmware 1.2.230511.1220. Everything except the HFP on/off switch has run against the real dongle. That switch follows the capture byte for byte.
+
+## Supported dongles
+
+| Dongle | USB ID | Status |
+|---|---|---|
+| BT-W5 | `041e:3130` | Tested, firmware 1.2.230511.1220 |
+| BT-W6 | `041e:3132` | Untested. Another user reported that the original script's aptX switching works with this ID, so the commands are probably shared. Its aptX Lossless and LE Audio features have no known commands yet. |
+
+If you have a BT-W6, the output of `btw5 -v status` tells whether its replies arrive.
 
 ## Install
 
@@ -34,12 +43,14 @@ sed "s|^Exec=btw5|Exec=$HOME/.cargo/bin/btw5|" btw5-tray.desktop > ~/.config/aut
 
 ```
 $ btw5
+Model:       Creative BT-W5
 Firmware:    1.2.230511.1220
 Serial:      YDSA0180000000000A
 Address:     04:3C:21:AA:BB:CC
-Headset:     Aurvana Ace 2 (02:00:55:66:77:88), connected
-aptX mode:   low latency (set: low latency)
-HFP:         on
+Headset:     Aurvana Ace 2 (02:00:55:66:77:88)
+Protocol:    A2DP, aptX Adaptive low latency
+aptX mode:   low latency
+HFP:         allowed
 Auto HFP:    off
 Paired:      2 of 4 slots
   [0] 02:00:11:22:33:44 Aurvana Ace
@@ -55,7 +66,7 @@ Paired:      2 of 4 slots
 | `btw5 scan [--secs 30] [--connect NAME\|ADDR]` | Disconnect, enter pairing mode and list headsets in range. `--connect` pairs with one as soon as it shows up. |
 | `btw5 connect ADDR` | Connect to a headset. |
 | `btw5 disconnect` | Drop the headset; the dongle enters pairing mode. |
-| `btw5 forget-all --yes` | Erase all pairings. |
+| `btw5 forget-all --yes` | Erase all pairings. The dongle restarts. There is no known command to forget a single headset. |
 | `btw5 tray` | Run the tray icon. |
 | `btw5 monitor` | Print every message the dongle sends. |
 | `btw5 raw 6b 09 08` | Send a raw frame and print the replies. |
@@ -99,7 +110,9 @@ Each setting has a write ID, and its read ID is the write ID plus 5.
 | Auto HFP | `02` | `07` | 1 on, 0 off |
 | aptX Adaptive mode | `03` | `08` | `20` low latency, `40` high quality |
 
-Read ID `01` returns the number of pairing slots, 4 on this unit. Read ID `03` returns the aptX mode running on the current link, and the dongle rejects it when nothing is connected. I don't know what `00`, `02`, `04` and `05` mean.
+Read ID `01` returns the number of pairing slots, 4 on this unit, and `6b 01` returns how many are in use. Read ID `03` returns the aptX mode running on the current link, and the dongle rejects it when nothing is connected. I don't know what `00`, `02`, `04` and `05` mean.
+
+The dongle has no codec query. `Protocol:` is derived from the connection state and read ID `03`. Call mode means HFP. In music mode, a value in `03` means aptX Adaptive. Without one, the codec is aptX HD, aptX or SBC, and the tool can't tell which.
 
 Connection state `06` means paging. The dongle cycles through its paired headsets trying to reconnect, and the LED blinks white. A headset that connects produces `08`, followed by `0b` in music mode (A2DP) or `0c` in call mode (HFP, LED red). A disconnect produces `07`, then `0a` as the dongle starts pairing mode.
 

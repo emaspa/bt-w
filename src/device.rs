@@ -10,6 +10,10 @@ use crate::proto::*;
 
 pub struct Dongle {
     dev: HidDevice,
+    /// "BT-W5" or "BT-W6".
+    pub model: &'static str,
+    /// Whether this model has been checked against real hardware.
+    pub tested: bool,
     /// Print every frame sent and received.
     pub verbose: bool,
 }
@@ -19,10 +23,13 @@ const REPLY_TIMEOUT: Duration = Duration::from_millis(800);
 impl Dongle {
     pub fn open() -> Result<Self> {
         let api = HidApi::new().context("initialising HID")?;
-        let candidates: Vec<_> =
-            api.device_list().filter(|d| d.vendor_id() == VID && d.product_id() == PID).collect();
+        let model_of = |pid| MODELS.iter().find(|m| m.0 == pid);
+        let candidates: Vec<_> = api
+            .device_list()
+            .filter(|d| d.vendor_id() == VID && model_of(d.product_id()).is_some())
+            .collect();
         if candidates.is_empty() {
-            bail!("no Creative BT-W5 found (USB {VID:04x}:{PID:04x})");
+            bail!("no Creative BT-W5 or BT-W6 found");
         }
         // The config channel is the vendor collection on interface 0. Linux reports one
         // entry per collection with the same path; other OSes give it its own path.
@@ -30,7 +37,8 @@ impl Dongle {
             .iter()
             .find(|d| d.usage_page() == USAGE_PAGE)
             .or_else(|| candidates.iter().find(|d| d.interface_number() == 0))
-            .ok_or_else(|| anyhow!("BT-W5 found, but not its configuration interface"))?;
+            .ok_or_else(|| anyhow!("dongle found, but not its configuration interface"))?;
+        let &(_, model, tested) = model_of(info.product_id()).expect("filtered above");
         let dev = info.open_device(&api).map_err(|e| {
             anyhow!(
                 "cannot open {}: {e}\n\
@@ -38,7 +46,7 @@ impl Dongle {
                 info.path().to_string_lossy()
             )
         })?;
-        Ok(Dongle { dev, verbose: false })
+        Ok(Dongle { dev, model, tested, verbose: false })
     }
 
     pub fn send(&self, frame: &Frame) -> Result<()> {
@@ -89,7 +97,16 @@ impl Dongle {
                 bail!("dongle rejected [{}]: status 0x{status:02x}", hex(&req.payload));
             }
         }
-        bail!("no reply to [{}] from the dongle", hex(&req.payload))
+        let mut msg = format!("no reply to [{}] from the {}", hex(&req.payload), self.model);
+        if !self.tested {
+            // Settings writes may still work: only the replies are missing.
+            msg.push_str(&format!(
+                "\nThe {} is untested; its replies may not reach this driver. \
+                 Please report the output of `btw5 -v monitor` while running another command.",
+                self.model
+            ));
+        }
+        bail!(msg)
     }
 
     /// Send a command that only gets an ack.

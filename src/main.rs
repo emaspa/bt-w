@@ -12,7 +12,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use device::Dongle;
 use proto::*;
 
-/// Configure a Creative BT-W5 Bluetooth audio dongle.
+/// Configure a Creative BT-W5 or BT-W6 Bluetooth audio dongle.
 #[derive(Parser)]
 #[command(version)]
 struct Cli {
@@ -81,6 +81,11 @@ enum OnOff {
 }
 
 fn main() -> Result<()> {
+    // Die quietly on a closed pipe (`btw5 status | head`) like other CLI tools.
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
     let cli = Cli::parse();
     #[cfg(target_os = "linux")]
     if matches!(cli.cmd, Some(Cmd::Tray)) {
@@ -157,20 +162,12 @@ fn main() -> Result<()> {
         }
         Cmd::Monitor => loop {
             if let Some(f) = d.recv(Duration::from_secs(3600))? {
-                out(&describe(&f));
+                println!("{}", describe(&f));
             }
         },
         Cmd::Raw { bytes } => raw(&d, &bytes),
         #[cfg(target_os = "linux")]
         Cmd::Tray => unreachable!("handled above"),
-    }
-}
-
-/// Print a line; exit quietly when stdout is closed (e.g. piped into `head`).
-fn out(line: &str) {
-    use std::io::Write;
-    if writeln!(std::io::stdout(), "{line}").is_err() {
-        std::process::exit(0);
     }
 }
 
@@ -187,27 +184,26 @@ fn aptx_name(v: u8) -> String {
 }
 
 fn status(d: &Dongle) -> Result<()> {
+    let note = if d.tested { "" } else { " (untested model)" };
+    println!("Model:       Creative {}{note}", d.model);
     println!("Firmware:    {}", d.firmware()?);
     println!("Serial:      {}", d.serial()?);
     println!("Address:     {}", d.own_address()?);
     let c = d.connection()?;
+    let active = d.active_mode();
     match &c.peer {
-        Some((addr, name)) if c.in_call() => {
-            println!("Headset:     {name} ({addr}), call mode (HFP): mic on")
-        }
         Some((addr, name)) if c.is_connected() => {
-            println!("Headset:     {name} ({addr}), music mode (A2DP): mic off")
+            println!("Headset:     {name} ({addr})");
+            if let Some(link) = link_description(&c, active) {
+                println!("Protocol:    {link}");
+            }
         }
         Some((addr, name)) => println!("Headset:     not connected, {} ({name}, {addr})", c.describe()),
         None => println!("Headset:     none ({})", c.describe()),
     }
-    let wanted = d.get(Setting::AptxMode)?;
-    match d.active_mode() {
-        Some(a) => println!("aptX mode:   {} (set: {})", aptx_name(a), aptx_name(wanted)),
-        None => println!("aptX mode:   set to {} (not active: no aptX Adaptive link)", aptx_name(wanted)),
-    }
+    println!("aptX mode:   {}", aptx_name(d.get(Setting::AptxMode)?));
     let hfp = d.get(Setting::Hfp)?;
-    println!("HFP:         {}", if hfp == 1 { "on" } else { "off" });
+    println!("HFP:         {}", if hfp == 1 { "allowed" } else { "off" });
     println!("Auto HFP:    {}", on_off(d.get(Setting::AutoHfp)? == 1));
     print_paired(&d.paired()?);
     Ok(())
@@ -283,7 +279,7 @@ fn raw(d: &Dongle, words: &[String]) -> Result<()> {
     let (cmd, payload) = bytes.split_first().context("need at least a command byte")?;
     d.send(&Frame::new(*cmd, payload))?;
     while let Some(f) = d.recv(Duration::from_millis(1000))? {
-        out(&format!("{f}    {}", describe(&f)));
+        println!("{f}    {}", describe(&f));
     }
     Ok(())
 }

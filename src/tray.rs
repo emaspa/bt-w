@@ -20,6 +20,8 @@ use crate::proto::*;
 #[derive(Clone, Default)]
 struct State {
     present: bool,
+    /// Model of the open dongle ("BT-W5", "BT-W6").
+    model: Option<&'static str>,
     error: Option<String>,
     conn: Option<ConnEvent>,
     aptx_set: Option<u8>,
@@ -39,9 +41,13 @@ impl State {
         self.conn.as_ref().filter(|c| c.is_connected()).and_then(|c| c.peer.as_ref())
     }
 
+    fn protocol(&self) -> Option<String> {
+        link_description(self.conn.as_ref()?, self.aptx_active).map(|l| format!("Protocol: {l}"))
+    }
+
     fn headline(&self) -> String {
         if !self.present {
-            return "BT-W5 not found".into();
+            return "No BT-W5 or BT-W6 found".into();
         }
         if let Some(b) = &self.busy {
             return b.clone();
@@ -50,11 +56,7 @@ impl State {
             return "Pairing: put your headset in pairing mode".into();
         }
         match (self.connected(), &self.conn) {
-            (Some((_, name)), Some(c)) if c.in_call() => format!("{name} · call mode, mic on"),
-            (Some((_, name)), _) => match self.aptx_active {
-                Some(m) => format!("{name} · {}", mode_label(m)),
-                None => format!("{name} · connected"),
-            },
+            (Some((_, name)), _) => name.clone(),
             (None, Some(c)) if c.state == 0x06 => "Searching for paired headsets".into(),
             _ => "No headset connected".into(),
         }
@@ -80,14 +82,6 @@ impl State {
             Some(APTX_HIGH_QUALITY) => ([0xa8, 0x55, 0xf7], 0xff),
             _ => ([0xd0, 0xd0, 0xd0], 0xff),
         }
-    }
-}
-
-fn mode_label(m: u8) -> &'static str {
-    match m {
-        APTX_LOW_LATENCY => "low latency",
-        APTX_HIGH_QUALITY => "high quality",
-        _ => "aptX Adaptive",
     }
 }
 
@@ -120,7 +114,7 @@ impl ksni::Tray for Tray {
     }
 
     fn title(&self) -> String {
-        "BT-W5".into()
+        self.state.model.unwrap_or("BT-W5").into()
     }
 
     fn icon_pixmap(&self) -> Vec<Icon> {
@@ -130,10 +124,15 @@ impl ksni::Tray for Tray {
 
     fn tool_tip(&self) -> ToolTip {
         let mut description = self.state.headline();
+        if let Some(p) = self.state.protocol() {
+            description.push('\n');
+            description.push_str(&p);
+        }
         if let Some(e) = &self.state.error {
             description.push_str(&format!("\nError: {e}"));
         }
-        ToolTip { title: "Creative BT-W5".into(), description, ..Default::default() }
+        let title = format!("Creative {}", self.state.model.unwrap_or("BT-W5 / BT-W6"));
+        ToolTip { title, description, ..Default::default() }
     }
 
     fn menu_about_to_show(&mut self) {
@@ -143,6 +142,9 @@ impl ksni::Tray for Tray {
     fn menu(&self) -> Vec<MenuItem<Self>> {
         let s = &self.state;
         let mut items: Vec<MenuItem<Self>> = vec![label(s.headline())];
+        if let Some(p) = s.protocol() {
+            items.push(label(p));
+        }
         if let Some(e) = &s.error {
             items.push(label(format!("Error: {e}")));
         }
@@ -375,6 +377,7 @@ fn worker(handle: Handle<Tray>, rx: Receiver<Cmd>) -> ! {
 
 fn refresh(d: &Dongle, st: &mut State) -> Result<()> {
     st.present = true;
+    st.model = Some(d.model);
     st.conn = Some(d.connection()?);
     st.aptx_set = Some(d.get(Setting::AptxMode)?);
     st.aptx_active = d.active_mode();
