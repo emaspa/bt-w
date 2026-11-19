@@ -117,3 +117,7 @@ The dongle has no codec query. `Protocol:` is derived from the connection state 
 Connection state `06` means paging. The dongle cycles through its paired headsets trying to reconnect, and the LED blinks white. A headset that connects produces `08`, followed by `0b` in music mode (A2DP) or `0c` in call mode (HFP, LED red). A disconnect produces `07`, then `0a` as the dongle starts pairing mode.
 
 If you write the aptX mode while no headset is connected, the dongle acks it and then falls back to high quality. `bt-w mode` refuses to run in that state for this reason.
+
+## License
+
+GPL-3.0-or-later. See [LICENSE](LICENSE).
