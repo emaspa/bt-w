@@ -1,0 +1,289 @@
+mod device;
+mod proto;
+#[cfg(target_os = "linux")]
+mod tray;
+
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
+
+use anyhow::{Context, Result, bail};
+use clap::{Parser, Subcommand, ValueEnum};
+
+use device::Dongle;
+use proto::*;
+
+/// Configure a Creative BT-W5 Bluetooth audio dongle.
+#[derive(Parser)]
+#[command(version)]
+struct Cli {
+    /// Print every frame exchanged with the dongle.
+    #[arg(short, long, global = true)]
+    verbose: bool,
+    #[command(subcommand)]
+    cmd: Option<Cmd>,
+}
+
+#[derive(Subcommand)]
+enum Cmd {
+    /// Show firmware, settings, connected headset and pairings (default).
+    Status,
+    /// Set aptX Adaptive mode.
+    Mode { mode: AptxMode },
+    /// Enable or disable the hands-free profile (headset mic). The dongle restarts.
+    Hfp { state: OnOff },
+    /// Switch to HFP automatically when an app opens the microphone.
+    AutoHfp { state: OnOff },
+    /// List paired headsets.
+    Paired,
+    /// Disconnect the headset, enter pairing mode and list devices in range.
+    Scan {
+        /// Seconds to listen for devices.
+        #[arg(short, long, default_value_t = 30)]
+        secs: u64,
+        /// Connect as soon as a device with this address or name shows up.
+        #[arg(short, long)]
+        connect: Option<String>,
+    },
+    /// Connect to a headset by address (pair it first with `scan`).
+    Connect { addr: BdAddr },
+    /// Disconnect the current headset; the dongle enters pairing mode.
+    Disconnect,
+    /// Erase every pairing stored on the dongle.
+    ForgetAll {
+        /// Required: confirms that all pairings should be erased.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Print everything the dongle sends until Ctrl-C.
+    Monitor,
+    /// Run as a system tray icon.
+    #[cfg(target_os = "linux")]
+    Tray,
+    /// Send a raw frame (`<cmd> <payload...>` in hex, e.g. `6b 09 08`) and print replies.
+    Raw {
+        #[arg(required = true)]
+        bytes: Vec<String>,
+    },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum AptxMode {
+    /// Low latency (games, video).
+    Ll,
+    /// High quality (music).
+    Hq,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum OnOff {
+    On,
+    Off,
+}
+
+fn main() -> Result<()> {
+    let cli = Cli::parse();
+    #[cfg(target_os = "linux")]
+    if matches!(cli.cmd, Some(Cmd::Tray)) {
+        return tray::run();
+    }
+    let mut d = Dongle::open()?;
+    d.verbose = cli.verbose;
+
+    match cli.cmd.unwrap_or(Cmd::Status) {
+        Cmd::Status => status(&d),
+        Cmd::Mode { mode } => {
+            let v = match mode {
+                AptxMode::Ll => APTX_LOW_LATENCY,
+                AptxMode::Hq => APTX_HIGH_QUALITY,
+            };
+            // While no headset is connected the dongle accepts the write, then falls
+            // back to high quality, so only switch over a live link.
+            if !d.connection()?.is_connected() {
+                bail!("no headset connected; connect one first (the dongle drops the mode otherwise)");
+            }
+            d.set(Setting::AptxMode, v)?;
+            // The link renegotiates; wait for the active mode to follow.
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let active = loop {
+                let a = d.active_mode();
+                if a == Some(v) || Instant::now() >= deadline {
+                    break a;
+                }
+                std::thread::sleep(Duration::from_millis(250));
+            };
+            match active {
+                Some(a) if a == v => println!("aptX Adaptive: {}", aptx_name(a)),
+                Some(a) => bail!("requested {}, but the link is running {}", aptx_name(v), aptx_name(a)),
+                None => bail!("headset is not using aptX Adaptive (no active mode reported)"),
+            }
+            Ok(())
+        }
+        Cmd::Hfp { state } => {
+            let v = match state {
+                OnOff::On => 1,
+                OnOff::Off => 2,
+            };
+            if d.get(Setting::Hfp)? == v {
+                println!("HFP already {}", on_off(v == 1));
+                return Ok(());
+            }
+            d.set(Setting::Hfp, v)?;
+            println!("HFP {}; the dongle is restarting and will reconnect the headset.", on_off(v == 1));
+            Ok(())
+        }
+        Cmd::AutoHfp { state } => {
+            d.set(Setting::AutoHfp, matches!(state, OnOff::On) as u8)?;
+            println!("Auto HFP: {}", on_off(d.get(Setting::AutoHfp)? == 1));
+            Ok(())
+        }
+        Cmd::Paired => {
+            print_paired(&d.paired()?);
+            Ok(())
+        }
+        Cmd::Scan { secs, connect } => scan(&d, Duration::from_secs(secs), connect.as_deref()),
+        Cmd::Connect { addr } => connect(&d, addr),
+        Cmd::Disconnect => {
+            d.disconnect()?;
+            println!("Disconnected; the dongle is in pairing mode.");
+            Ok(())
+        }
+        Cmd::ForgetAll { yes } => {
+            if !yes {
+                bail!("this erases every pairing on the dongle; pass --yes to confirm");
+            }
+            d.forget_all()?;
+            println!("All pairings erased.");
+            Ok(())
+        }
+        Cmd::Monitor => loop {
+            if let Some(f) = d.recv(Duration::from_secs(3600))? {
+                out(&describe(&f));
+            }
+        },
+        Cmd::Raw { bytes } => raw(&d, &bytes),
+        #[cfg(target_os = "linux")]
+        Cmd::Tray => unreachable!("handled above"),
+    }
+}
+
+/// Print a line; exit quietly when stdout is closed (e.g. piped into `head`).
+fn out(line: &str) {
+    use std::io::Write;
+    if writeln!(std::io::stdout(), "{line}").is_err() {
+        std::process::exit(0);
+    }
+}
+
+fn on_off(b: bool) -> &'static str {
+    if b { "on" } else { "off" }
+}
+
+fn aptx_name(v: u8) -> String {
+    match v {
+        APTX_LOW_LATENCY => "low latency".into(),
+        APTX_HIGH_QUALITY => "high quality".into(),
+        v => format!("unknown (0x{v:02x})"),
+    }
+}
+
+fn status(d: &Dongle) -> Result<()> {
+    println!("Firmware:    {}", d.firmware()?);
+    println!("Serial:      {}", d.serial()?);
+    println!("Address:     {}", d.own_address()?);
+    let c = d.connection()?;
+    match &c.peer {
+        Some((addr, name)) if c.in_call() => {
+            println!("Headset:     {name} ({addr}), call mode (HFP): mic on")
+        }
+        Some((addr, name)) if c.is_connected() => {
+            println!("Headset:     {name} ({addr}), music mode (A2DP): mic off")
+        }
+        Some((addr, name)) => println!("Headset:     not connected, {} ({name}, {addr})", c.describe()),
+        None => println!("Headset:     none ({})", c.describe()),
+    }
+    let wanted = d.get(Setting::AptxMode)?;
+    match d.active_mode() {
+        Some(a) => println!("aptX mode:   {} (set: {})", aptx_name(a), aptx_name(wanted)),
+        None => println!("aptX mode:   set to {} (not active: no aptX Adaptive link)", aptx_name(wanted)),
+    }
+    let hfp = d.get(Setting::Hfp)?;
+    println!("HFP:         {}", if hfp == 1 { "on" } else { "off" });
+    println!("Auto HFP:    {}", on_off(d.get(Setting::AutoHfp)? == 1));
+    print_paired(&d.paired()?);
+    Ok(())
+}
+
+fn print_paired(slots: &[PairedSlot]) {
+    let used: Vec<_> = slots.iter().filter(|s| !s.is_empty()).collect();
+    println!("Paired:      {} of {} slots", used.len(), slots.len());
+    for s in used {
+        println!("  [{}] {} {}", s.slot, s.addr, s.name);
+    }
+}
+
+fn matches_target(r: &ScanResult, target: &str) -> bool {
+    match target.parse::<BdAddr>() {
+        Ok(a) => a == r.addr,
+        Err(_) => r.name.eq_ignore_ascii_case(target),
+    }
+}
+
+fn scan(d: &Dongle, secs: Duration, target: Option<&str>) -> Result<()> {
+    d.disconnect()?;
+    eprintln!("Pairing mode: put the headset in pairing mode. Listening for {}s...", secs.as_secs());
+    let deadline = Instant::now() + secs;
+    let mut seen: HashMap<BdAddr, ScanResult> = HashMap::new();
+    while let Some(f) = d.recv(deadline.saturating_duration_since(Instant::now()))? {
+        let Some(r) = ScanResult::parse(&f) else { continue };
+        if seen.insert(r.addr, r.clone()).is_none() {
+            let rssi = r.rssi.map(|v| format!("  {v} dBm")).unwrap_or_default();
+            println!("{}  {}{rssi}", r.addr, r.name);
+        }
+        if let Some(t) = target
+            && matches_target(&r, t)
+        {
+            return connect(d, r.addr);
+        }
+    }
+    if let Some(t) = target {
+        bail!("{t:?} did not show up within {}s", secs.as_secs());
+    }
+    if seen.is_empty() {
+        eprintln!("No devices found.");
+    } else {
+        eprintln!("Connect with: btw5 connect <ADDRESS>");
+    }
+    Ok(())
+}
+
+fn connect(d: &Dongle, addr: BdAddr) -> Result<()> {
+    d.connect(addr)?;
+    eprintln!("Connecting to {addr}...");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while let Some(f) = d.recv(deadline.saturating_duration_since(Instant::now()))? {
+        if let Some(e) = ConnEvent::parse(&f)
+            && let Some((a, name)) = &e.peer
+            && *a == addr
+            && e.is_connected()
+        {
+            println!("Connected to {name} ({addr}).");
+            return Ok(());
+        }
+    }
+    bail!("no connection to {addr} within 20s (is the headset in pairing mode?)")
+}
+
+fn raw(d: &Dongle, words: &[String]) -> Result<()> {
+    let bytes = words
+        .iter()
+        .flat_map(|w| w.split([' ', ',']))
+        .filter(|w| !w.is_empty())
+        .map(|w| u8::from_str_radix(w.trim_start_matches("0x"), 16).with_context(|| format!("bad hex byte {w:?}")))
+        .collect::<Result<Vec<u8>>>()?;
+    let (cmd, payload) = bytes.split_first().context("need at least a command byte")?;
+    d.send(&Frame::new(*cmd, payload))?;
+    while let Some(f) = d.recv(Duration::from_millis(1000))? {
+        out(&format!("{f}    {}", describe(&f)));
+    }
+    Ok(())
+}
