@@ -81,7 +81,7 @@ enum OnOff {
 }
 
 fn main() -> Result<()> {
-    // Die quietly on a closed pipe (`btw5 status | head`) like other CLI tools.
+    // Die quietly on a closed pipe (`bt-w status | head`) like other CLI tools.
     #[cfg(unix)]
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
@@ -247,7 +247,7 @@ fn scan(d: &Dongle, secs: Duration, target: Option<&str>) -> Result<()> {
     if seen.is_empty() {
         eprintln!("No devices found.");
     } else {
-        eprintln!("Connect with: btw5 connect <ADDRESS>");
+        eprintln!("Connect with: bt-w connect <ADDRESS>");
     }
     Ok(())
 }

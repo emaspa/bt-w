@@ -110,11 +110,11 @@ impl ksni::Tray for Tray {
     const MENU_ON_ACTIVATE: bool = true;
 
     fn id(&self) -> String {
-        "btw5".into()
+        "bt-w".into()
     }
 
     fn title(&self) -> String {
-        self.state.model.unwrap_or("BT-W5").into()
+        self.state.model.unwrap_or("BT-W").into()
     }
 
     fn icon_pixmap(&self) -> Vec<Icon> {
@@ -337,10 +337,10 @@ pub fn run() -> Result<()> {
 fn single_instance() -> Result<File> {
     let dir: std::path::PathBuf =
         std::env::var_os("XDG_RUNTIME_DIR").map(Into::into).unwrap_or_else(std::env::temp_dir);
-    let path = dir.join("btw5-tray.lock");
+    let path = dir.join("bt-w-tray.lock");
     let f = File::create(&path).with_context(|| format!("creating {}", path.display()))?;
     if f.try_lock().is_err() {
-        bail!("the btw5 tray is already running");
+        bail!("the bt-w tray is already running");
     }
     Ok(f)
 }
@@ -367,7 +367,7 @@ fn worker(handle: Handle<Tray>, rx: Receiver<Cmd>) -> ! {
             }
         }
         if let Some(e) = last_error.take() {
-            eprintln!("btw5 tray: {e}; reopening");
+            eprintln!("bt-w tray: {e}; reopening");
         }
         // Menu clicks while the dongle is away do nothing.
         while rx.try_recv().is_ok() {}

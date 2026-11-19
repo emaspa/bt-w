@@ -1,8 +1,8 @@
 [Desktop Entry]
 Type=Application
-Name=BT-W5 Tray
-Comment=Tray icon for the Creative BT-W5 Bluetooth audio dongle
-Exec=btw5 tray
+Name=BT-W Tray
+Comment=Tray icon for the Creative BT-W5 and BT-W6 Bluetooth audio dongles
+Exec=bt-w tray
 Icon=audio-headphones
 Categories=AudioVideo;Audio;Settings;
 X-KDE-autostart-phase=2

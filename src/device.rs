@@ -102,7 +102,7 @@ impl Dongle {
             // Settings writes may still work: only the replies are missing.
             msg.push_str(&format!(
                 "\nThe {} is untested; its replies may not reach this driver. \
-                 Please report the output of `btw5 -v monitor` while running another command.",
+                 Please report the output of `bt-w -v monitor` while running another command.",
                 self.model
             ));
         }
