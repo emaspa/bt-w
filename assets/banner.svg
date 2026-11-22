@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 320" width="1280" height="320" role="img" aria-labelledby="t d">
+  <title id="t">bt-w</title>
+  <desc id="d">Linux control for Creative BT-W5 and BT-W6 Bluetooth dongles</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b0f17"/>
+      <stop offset="0.55" stop-color="#111726"/>
+      <stop offset="1" stop-color="#0d1020"/>
+    </linearGradient>
+    <radialGradient id="haloCyan" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#14c8e6" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#14c8e6" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="haloPurple" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#a855f7" stop-opacity="0.20"/>
+      <stop offset="1" stop-color="#a855f7" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="led" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#14c8e6"/>
+      <stop offset="1" stop-color="#a855f7"/>
+    </linearGradient>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#303a4d"/>
+      <stop offset="1" stop-color="#171d2a"/>
+    </linearGradient>
+    <linearGradient id="metal" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#dfe5ee"/>
+      <stop offset="0.5" stop-color="#9aa5b6"/>
+      <stop offset="1" stop-color="#6b7587"/>
+    </linearGradient>
+    <pattern id="grid" width="28" height="28" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1" fill="#ffffff" fill-opacity="0.07"/>
+    </pattern>
+    <linearGradient id="gridFade" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0.35" stop-color="#fff" stop-opacity="0"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="1"/>
+    </linearGradient>
+    <mask id="gridMask"><rect width="1280" height="320" fill="url(#gridFade)"/></mask>
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="6" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="softGlow" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="4" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="180%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="10"/>
+      <feOffset dy="10"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.5"/></feComponentTransfer>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <clipPath id="frame"><rect width="1280" height="320" rx="20"/></clipPath>
+  </defs>
+
+  <g clip-path="url(#frame)">
+    <rect width="1280" height="320" fill="url(#bg)"/>
+    <rect width="1280" height="320" fill="url(#grid)" mask="url(#gridMask)"/>
+    <circle cx="1060" cy="150" r="330" fill="url(#haloCyan)"/>
+    <circle cx="1230" cy="20" r="280" fill="url(#haloPurple)"/>
+
+    <!-- wordmark, drawn as strokes so it renders the same everywhere -->
+    <g fill="none" stroke="#f3f6fb" stroke-width="17" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M96 58V176"/>
+      <circle cx="132" cy="140" r="36"/>
+      <path d="M212 76V152a24 24 0 0 0 24 24h8"/>
+      <path d="M190 104h50"/>
+      <path d="M366 104l24 72 26-66 26 66 24-72"/>
+    </g>
+    <rect x="276" y="132" width="62" height="16" rx="8" fill="url(#led)" filter="url(#glow)"/>
+
+    <text x="88" y="232" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="23" fill="#a3afc2" letter-spacing="0.2">Linux control for Creative BT-W5 and BT-W6 Bluetooth dongles</text>
+
+    <!-- the dongle's LED colours -->
+    <g filter="url(#softGlow)">
+      <circle cx="96" cy="274" r="7" fill="#3b82f6"/>
+      <circle cx="126" cy="274" r="7" fill="#22c55e"/>
+      <circle cx="156" cy="274" r="7" fill="#f97316"/>
+      <circle cx="186" cy="274" r="7" fill="#14c8e6"/>
+      <circle cx="216" cy="274" r="7" fill="#a855f7"/>
+      <circle cx="246" cy="274" r="7" fill="#facc15"/>
+      <circle cx="276" cy="274" r="7" fill="#f3f6fb"/>
+      <circle cx="306" cy="274" r="7" fill="#e83fd0"/>
+    </g>
+
+    <!-- dongle -->
+    <g transform="translate(1012 160) rotate(-18) scale(1.15)">
+      <g fill="none" stroke-linecap="round" stroke-width="6" filter="url(#softGlow)">
+        <path d="M117.3 -36.9A60 60 0 0 1 117.3 36.9" stroke="#14c8e6" stroke-opacity="0.95"/>
+        <path d="M139.3 -54.2A88 88 0 0 1 139.3 54.2" stroke="#6f8df2" stroke-opacity="0.7"/>
+        <path d="M161.4 -71.4A116 116 0 0 1 161.4 71.4" stroke="#a855f7" stroke-opacity="0.45"/>
+      </g>
+      <g filter="url(#shadow)">
+        <rect x="-134" y="-18" width="62" height="36" rx="9" fill="url(#metal)"/>
+        <rect x="-124" y="-5" width="30" height="10" rx="5" fill="#4d5768" fill-opacity="0.55"/>
+        <rect x="-84" y="-40" width="176" height="80" rx="24" fill="url(#body)" stroke="#44506a" stroke-width="1.5"/>
+        <path d="M-58 -32.5H66" stroke="#ffffff" stroke-opacity="0.14" stroke-width="1.5" stroke-linecap="round"/>
+      </g>
+      <circle cx="46" cy="0" r="19" fill="#0c1018" stroke="#14c8e6" stroke-width="3.5" filter="url(#glow)"/>
+      <circle cx="46" cy="0" r="5" fill="#14c8e6" fill-opacity="0.9"/>
+    </g>
+  </g>
+</svg>
