@@ -2,16 +2,14 @@
 
 Command-line tool and tray icon for the Creative BT-W5 and BT-W6 Bluetooth audio dongles: switch aptX Adaptive between low latency and high quality, toggle HFP, list and manage pairings, and pair new headsets. No Creative app needed.
 
-It goes through the OS HID driver, hidraw on Linux, so the dongle's media keys keep working. The original Python script detaches that driver instead. The protocol comes from the USB capture in [RaphaelWimmer/btw5-switch](https://github.com/RaphaelWimmer/btw5-switch). I tested it on a BT-W5 running firmware 1.2.230511.1220. Everything except the HFP on/off switch has run against the real dongle. That switch follows the capture byte for byte.
+It goes through the OS HID driver, hidraw on Linux, so the dongle's media keys keep working. The original Python script detaches that driver instead. The protocol comes from the USB capture in [RaphaelWimmer/btw5-switch](https://github.com/RaphaelWimmer/btw5-switch). Every command except the HFP on/off switch has run on a BT-W5. That switch follows the capture byte for byte. On a BT-W6 I've run status, scan, connect, mode and the tray.
 
 ## Supported dongles
 
 | Dongle | USB ID | Status |
 |---|---|---|
 | BT-W5 | `041e:3130` | Tested, firmware 1.2.230511.1220 |
-| BT-W6 | `041e:3132` | Untested. Another user reported that the original script's aptX switching works with this ID, so the commands are probably shared. Its aptX Lossless and LE Audio features have no known commands yet. |
-
-If you have a BT-W6, the output of `bt-w -v status` tells whether its replies arrive.
+| BT-W6 | `041e:3132` | Tested, firmware 1.1.260429.0814. Its aptX Lossless and LE Audio settings have no known commands yet. |
 
 ## Install
 
@@ -111,6 +109,13 @@ Each setting has a write ID, and its read ID is the write ID plus 5.
 | aptX Adaptive mode | `03` | `08` | `20` low latency, `40` high quality |
 
 Read ID `01` returns the number of pairing slots, 4 on this unit, and `6b 01` returns how many are in use. Read ID `03` returns the aptX mode running on the current link, and the dongle rejects it when nothing is connected. I don't know what `00`, `02`, `04` and `05` mean.
+
+The BT-W6 differs in a few places:
+
+- It rejects read ID `03` even with a headset connected. Read ID `0c` holds the active mode instead (`20 00 00 00` or `40 00 00 00`), and the dongle sends it unprompted after a connect. bt-w tries `03` first, then `0c`.
+- An unused pairing slot gets a `80` rejection rather than an empty slot.
+- The idle connection state carries an all-zero address.
+- It has more read IDs. `09` is the dongle's Bluetooth name as a counted string (`BT-W6 00`) and `0a` is its PIN (`000000`). `0e` reads `07 40 00 00` with the Ace 2 connected in both aptX modes and is rejected when idle, so it may describe the link or the headset. `0b` (`f5 03 00 00`), `0d` (`00`), `0f` (`00 00`) and `10` (`00`) don't change with the aptX mode. Two of these are probably the aptX Lossless and LE Audio switches. I haven't written to any of them, since I don't know what a write would do. A capture from Creative's app would settle it.
 
 The dongle has no codec query. `Protocol:` is derived from the connection state and read ID `03`. Call mode means HFP. In music mode, a value in `03` means aptX Adaptive. Without one, the codec is aptX HD, aptX or SBC, and the tool can't tell which.
 

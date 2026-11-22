@@ -8,8 +8,8 @@ use std::fmt;
 
 pub const VID: u16 = 0x041e;
 /// Supported dongles: USB product ID, name, and whether it has been tested on hardware.
-/// The BT-W6 uses the same app and, per user reports, the same commands.
-pub const MODELS: &[(u16, &str, bool)] = &[(0x3130, "BT-W5", true), (0x3132, "BT-W6", false)];
+/// The BT-W6 speaks the same protocol, with a few differences noted where they matter.
+pub const MODELS: &[(u16, &str, bool)] = &[(0x3130, "BT-W5", true), (0x3132, "BT-W6", true)];
 pub const USAGE_PAGE: u16 = 0xff01;
 pub const REPORT_ID: u8 = 0x03;
 pub const MAGIC: u8 = 0x5a;
@@ -180,7 +180,9 @@ impl ConnEvent {
     pub fn parse(frame: &Frame) -> Option<Self> {
         let p = frame.bt(BT_CONN_EVENT)?;
         let state = *p.first()?;
+        // An idle dongle (BT-W6) sends an all-zero address: no peer.
         let peer = BdAddr::from_wire(&p[1..])
+            .filter(|a| !a.is_zero())
             .map(|addr| (addr, p.get(7..).and_then(counted_str).map(|(s, _)| s).unwrap_or_default()));
         Some(ConnEvent { state, peer })
     }

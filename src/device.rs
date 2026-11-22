@@ -159,10 +159,13 @@ impl Dongle {
             .ok_or_else(|| anyhow!("empty reply for {s:?}"))
     }
 
-    /// aptX Adaptive mode running on the current link (param 0x03). None when no
-    /// headset is connected: the dongle rejects the read then.
+    /// aptX Adaptive mode running on the current link. The BT-W5 reports it in
+    /// param 0x03, the BT-W6 in 0x0c (it rejects 0x03). None when no headset is
+    /// connected: both dongles reject the read then.
     pub fn active_mode(&self) -> Option<u8> {
-        self.get_param(0x03).ok()?.first().copied()
+        [0x03, 0x0c]
+            .into_iter()
+            .find_map(|id| self.get_param(id).ok()?.first().copied())
     }
 
     pub fn set(&self, s: Setting, value: u8) -> Result<()> {
@@ -191,9 +194,14 @@ impl Dongle {
         let slots = self.get_param(0x01).ok().and_then(|v| v.first().copied()).unwrap_or(4);
         let mut out = Vec::new();
         for i in 0..slots {
-            let s = self.request(&Frame::new(CMD_BT, &[BT_PAIRED, i]), |f| {
+            // The BT-W5 reports an unused slot as empty; the BT-W6 rejects the read.
+            let s = match self.request(&Frame::new(CMD_BT, &[BT_PAIRED, i]), |f| {
                 PairedSlot::parse(f).filter(|s| s.slot == i)
-            })?;
+            }) {
+                Ok(s) => s,
+                Err(e) if e.to_string().contains("rejected") => PairedSlot { slot: i, flags: 0x80, addr: BdAddr([0; 6]), name: String::new() },
+                Err(e) => return Err(e),
+            };
             if !s.exists() {
                 break;
             }
