@@ -134,17 +134,19 @@ fn main() -> Result<()> {
                 bail!("the headset is on LE Audio; aptX needs Bluetooth Classic (`bt-w le-audio off`)");
             }
             d.set(Setting::AptxMode, v)?;
-            // The link renegotiates; wait for the active mode to follow.
+            // The link renegotiates; wait for the active mode to follow. High quality
+            // shows up as aptX Lossless when the BT-W6 and headset can do it.
+            let reached = |a: Option<u8>| a == Some(v) || (v == APTX_HIGH_QUALITY && a == Some(APTX_LOSSLESS));
             let deadline = Instant::now() + Duration::from_secs(5);
             let active = loop {
                 let a = d.active_mode();
-                if a == Some(v) || Instant::now() >= deadline {
+                if reached(a) || Instant::now() >= deadline {
                     break a;
                 }
                 std::thread::sleep(Duration::from_millis(250));
             };
             match active {
-                Some(a) if a == v => println!("aptX Adaptive: {}", aptx_name(a)),
+                Some(a) if reached(Some(a)) => println!("aptX: {}", aptx_name(a)),
                 Some(a) => bail!("requested {}, but the link is running {}", aptx_name(v), aptx_name(a)),
                 None => bail!("headset is not using aptX Adaptive (no active mode reported)"),
             }
@@ -232,6 +234,7 @@ fn aptx_name(v: u8) -> String {
     match v {
         APTX_LOW_LATENCY => "low latency".into(),
         APTX_HIGH_QUALITY => "high quality".into(),
+        APTX_LOSSLESS => "high quality, running as aptX Lossless".into(),
         v => format!("unknown (0x{v:02x})"),
     }
 }
@@ -380,7 +383,19 @@ fn scan(d: &Dongle, secs: Duration, target: Option<&str>) -> Result<()> {
 }
 
 fn connect(d: &Dongle, addr: BdAddr) -> Result<()> {
-    d.connect(addr)?;
+    let is_peer = |e: &ConnEvent| e.peer.as_ref().is_some_and(|(a, _)| *a == addr);
+    if let Err(err) = d.connect(addr) {
+        // A headset that connects on its own as it leaves pairing mode makes the dongle
+        // reject the request (0x80). That's only a failure if it isn't this headset.
+        if !is_peer(&d.connection()?) {
+            return Err(err);
+        }
+    }
+    let now = d.connection()?;
+    if is_peer(&now) && now.is_connected() {
+        println!("Connected to {} ({addr}).", now.peer.map(|p| p.1).unwrap_or_default());
+        return Ok(());
+    }
     eprintln!("Connecting to {addr}...");
     let deadline = Instant::now() + Duration::from_secs(20);
     while let Some(f) = d.recv(deadline.saturating_duration_since(Instant::now()))? {

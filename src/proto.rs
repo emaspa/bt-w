@@ -103,6 +103,9 @@ pub const BROADCAST_TOGGLE: [u8; 3] = [BT_SET, 0x01, 0x08];
 
 pub const APTX_LOW_LATENCY: u8 = 0x20;
 pub const APTX_HIGH_QUALITY: u8 = 0x40;
+/// Reported as the active mode (never written): high quality running as aptX Lossless,
+/// on a BT-W6 with a headset that supports it (LED yellow).
+pub const APTX_LOSSLESS: u8 = 0x80;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Frame {
@@ -291,6 +294,7 @@ pub fn link_description(conn: &ConnEvent, active_mode: Option<u8>) -> Option<Str
     Some(match active_mode {
         Some(APTX_LOW_LATENCY) => "A2DP, aptX Adaptive low latency".into(),
         Some(APTX_HIGH_QUALITY) => "A2DP, aptX Adaptive high quality".into(),
+        Some(APTX_LOSSLESS) => "A2DP, aptX Lossless".into(),
         _ => "A2DP, codec not reported (aptX HD, aptX or SBC)".into(),
     })
 }
@@ -443,6 +447,7 @@ mod tests {
         let le = ConnEvent { state: 0x0e, peer };
         assert_eq!(link_description(&le, Some(0x00)).unwrap(), "LE Audio, LC3");
         assert_eq!(link_description(&music, Some(0x20)).unwrap(), "A2DP, aptX Adaptive low latency");
+        assert_eq!(link_description(&music, Some(0x80)).unwrap(), "A2DP, aptX Lossless");
         assert!(link_description(&music, None).unwrap().contains("not reported"));
         assert!(link_description(&call, Some(0x20)).unwrap().starts_with("HFP"));
         assert_eq!(link_description(&ConnEvent { state: 0x06, peer: None }, None), None);

@@ -84,6 +84,7 @@ impl State {
         match self.aptx_active {
             Some(APTX_LOW_LATENCY) => ([0x14, 0xc8, 0xe6], 0xff),
             Some(APTX_HIGH_QUALITY) => ([0xa8, 0x55, 0xf7], 0xff),
+            Some(APTX_LOSSLESS) => ([0xfa, 0xcc, 0x15], 0xff),
             _ => ([0xd0, 0xd0, 0xd0], 0xff),
         }
     }
@@ -170,19 +171,19 @@ impl ksni::Tray for Tray {
         let mode = s.aptx_active.or(s.aptx_set);
         items.push(
             RadioGroup {
-                selected: if mode == Some(APTX_HIGH_QUALITY) { 1 } else { 0 },
+                selected: if matches!(mode, Some(APTX_HIGH_QUALITY | APTX_LOSSLESS)) { 1 } else { 0 },
                 select: Box::new(|t: &mut Self, i| {
                     let m = if i == 1 { APTX_HIGH_QUALITY } else { APTX_LOW_LATENCY };
                     t.state.aptx_set = Some(m);
                     t.send(Cmd::SetMode(m));
                 }),
-                options: ["Low latency", "High quality"]
+                options: ["Low latency", "High quality / aptX Lossless"]
                     .into_iter()
                     .map(|l| RadioItem {
                         label: l.into(),
                         enabled: idle
                             && connected.is_some()
-                            && matches!(s.aptx_active, Some(APTX_LOW_LATENCY | APTX_HIGH_QUALITY)),
+                            && matches!(s.aptx_active, Some(APTX_LOW_LATENCY | APTX_HIGH_QUALITY | APTX_LOSSLESS)),
                         ..Default::default()
                     })
                     .collect(),

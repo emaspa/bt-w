@@ -57,7 +57,7 @@ Paired:      2 of 4 slots
 
 | Command | What it does |
 |---|---|
-| `bt-w mode ll` / `bt-w mode hq` | aptX Adaptive mode. The LED turns cyan for low latency and purple for high quality. Needs a connected headset. |
+| `bt-w mode ll` / `bt-w mode hq` | aptX Adaptive mode. The LED turns cyan for low latency and purple for high quality. On a BT-W6 with a headset that supports it, high quality runs as aptX Lossless and the LED turns yellow. Needs a connected headset. |
 | `bt-w hfp on` / `off` | Hands-free profile, which enables the headset mic. The dongle restarts. |
 | `bt-w auto-hfp on` / `off` | Switch to HFP when an app opens the mic. |
 | `bt-w le-audio on` / `off` | BT-W6: prefer LE Audio (LC3) over Bluetooth Classic for headsets that do both. The headset reconnects. aptX needs Classic. |
@@ -122,7 +122,7 @@ Read ID `01` returns the number of pairing slots, 4 on this unit, and `6b 01` re
 
 The BT-W6 rows come from a USB capture of Creative's app. Its write IDs don't follow the plus-5 rule. The W6 also differs from the W5 in other ways:
 
-- It rejects read ID `03` even with a headset connected. Read ID `0c` holds the active mode instead (`20 00 00 00` or `40 00 00 00`, and `00 02 00 00` over LE Audio), and the dongle sends it unprompted after a connect. bt-w tries `03` first, then `0c`.
+- It rejects read ID `03` even with a headset connected. Read ID `0c` holds the active mode instead (`20 00 00 00` or `40 00 00 00`, `80 00 00 00` when high quality runs as aptX Lossless, and `00 02 00 00` over LE Audio), and the dongle sends it unprompted after a connect. bt-w tries `03` first, then `0c`.
 - An unused pairing slot gets a `80` rejection rather than an empty slot.
 - The idle connection state carries an all-zero address.
 - The broadcast name and code writes get no ack. bt-w reads them back to confirm.
@@ -131,7 +131,7 @@ The BT-W6 rows come from a USB capture of Creative's app. Its write IDs don't fo
 - After I stopped a broadcast, the dongle sat in connection state `03` and didn't page the Ace 2, and `bt-w connect` failed too. The headset only came back after a trip to its charging case. The Bluetooth mode also read Classic again afterwards, although it was LE Audio before the broadcast.
 - Read ID `0e` reads `07 40 00 00` whenever a headset is connected, over Classic or LE Audio, and is rejected when idle. `0b` reads `f5 03 00 00`. I don't know what either means.
 
-The dongle has no codec query. `Protocol:` is derived from the connection state and the active mode. Call mode means HFP, and state `0e` means LE Audio with LC3, which is what Creative's app shows for it. In music mode, a value in `03` means aptX Adaptive. Without one, the codec is aptX HD, aptX or SBC, and the tool can't tell which.
+The dongle has no codec query. `Protocol:` is derived from the connection state and the active mode. Call mode means HFP, and state `0e` means LE Audio with LC3, which is what Creative's app shows for it. In music mode, an active mode means aptX Adaptive, or aptX Lossless for `80`. Without one, the codec is aptX HD, aptX or SBC, and the tool can't tell which.
 
 Connection state `06` means paging. The dongle cycles through its paired headsets trying to reconnect, and the LED blinks white. A headset that connects produces `08`, followed by `0b` in music mode (A2DP), `0c` in call mode (HFP, LED red) or, on the BT-W6, `0e` over LE Audio. A disconnect produces `07`, then `0a` as the dongle starts pairing mode.
 
