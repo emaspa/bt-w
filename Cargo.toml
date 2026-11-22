@@ -3,6 +3,9 @@ name = "bt-w"
 version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
+description = "CLI and tray icon for the Creative BT-W5 and BT-W6 Bluetooth audio dongles"
+repository = "https://github.com/emaspa/bt-w"
+readme = "README.md"
 
 [dependencies]
 anyhow = "1.0.104"

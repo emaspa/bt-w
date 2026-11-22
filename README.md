@@ -22,7 +22,9 @@ bt-w goes through the OS HID driver, hidraw on Linux, so the dongle's media keys
 
 ## Install
 
-From a checkout of this repository:
+On Arch Linux, install [bt-w from the AUR](https://aur.archlinux.org/packages/bt-w), for example with `yay -S bt-w`. The package installs the udev rule, so replug the dongle once afterwards. The PKGBUILD lives in [`aur/`](aur/).
+
+Elsewhere, build it from a checkout of this repository:
 
 ```sh
 cargo install --path .
@@ -139,7 +141,13 @@ Click the icon for a menu with the aptX mode, the HFP switches, your paired head
 
 The icon updates as soon as the dongle reports a change, including presses of its own button and headsets turning off. It needs a panel that supports StatusNotifierItem, which covers KDE Plasma and most others. GNOME needs the AppIndicator extension.
 
-To start it with your desktop:
+To start it with your desktop, copy the menu entry the AUR package installs:
+
+```sh
+cp /usr/share/applications/bt-w-tray.desktop ~/.config/autostart/
+```
+
+With a `cargo install` build, point the entry at `~/.cargo/bin` instead:
 
 ```sh
 sed "s|^Exec=bt-w|Exec=$HOME/.cargo/bin/bt-w|" bt-w-tray.desktop > ~/.config/autostart/bt-w-tray.desktop
