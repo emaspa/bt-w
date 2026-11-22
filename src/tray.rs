@@ -28,6 +28,9 @@ struct State {
     aptx_active: Option<u8>,
     hfp: Option<bool>,
     auto_hfp: Option<bool>,
+    /// BT-W6 only (None on a BT-W5): LE Audio preferred, GMAP.
+    le_audio: Option<bool>,
+    gmap: Option<bool>,
     paired: Vec<PairedSlot>,
     /// Dongle is in pairing mode; `found` lists headsets seen since.
     pairing: bool,
@@ -58,6 +61,7 @@ impl State {
         match (self.connected(), &self.conn) {
             (Some((_, name)), _) => name.clone(),
             (None, Some(c)) if c.state == 0x06 => "Searching for paired headsets".into(),
+            (None, Some(c)) if c.is_broadcasting() => "LE Audio broadcast on".into(),
             _ => "No headset connected".into(),
         }
     }
@@ -85,10 +89,14 @@ impl State {
     }
 }
 
+#[derive(Clone)]
 enum Cmd {
     SetMode(u8),
     SetHfp(bool),
     SetAutoHfp(bool),
+    SetLeAudio(bool),
+    SetGmap(bool),
+    SetBroadcast(bool),
     Connect(BdAddr, String),
     Disconnect,
     Pair,
@@ -172,7 +180,9 @@ impl ksni::Tray for Tray {
                     .into_iter()
                     .map(|l| RadioItem {
                         label: l.into(),
-                        enabled: idle && connected.is_some() && s.aptx_active.is_some(),
+                        enabled: idle
+                            && connected.is_some()
+                            && matches!(s.aptx_active, Some(APTX_LOW_LATENCY | APTX_HIGH_QUALITY)),
                         ..Default::default()
                     })
                     .collect(),
@@ -204,6 +214,14 @@ impl ksni::Tray for Tray {
                 }
                 .into(),
             );
+        }
+
+        if let (Some(le), Some(gmap)) = (s.le_audio, s.gmap) {
+            let broadcasting = s.conn.as_ref().is_some_and(|c| c.is_broadcasting());
+            items.push(MenuItem::Separator);
+            items.push(check("Prefer LE Audio", le, idle, Cmd::SetLeAudio(!le)));
+            items.push(check("Gaming Audio Profile (GMAP)", gmap, idle && le, Cmd::SetGmap(!gmap)));
+            items.push(check("LE Audio broadcast", broadcasting, idle, Cmd::SetBroadcast(!broadcasting)));
         }
 
         items.push(MenuItem::Separator);
@@ -272,6 +290,18 @@ impl ksni::Tray for Tray {
         items.push(quit());
         items
     }
+}
+
+/// Checkmark item that sends `cmd` when clicked.
+fn check(label: &str, checked: bool, enabled: bool, cmd: Cmd) -> MenuItem<Tray> {
+    CheckmarkItem {
+        label: label.into(),
+        checked,
+        enabled,
+        activate: Box::new(move |t: &mut Tray| t.send(cmd.clone())),
+        ..Default::default()
+    }
+    .into()
 }
 
 fn label(text: String) -> MenuItem<Tray> {
@@ -383,6 +413,12 @@ fn refresh(d: &Dongle, st: &mut State) -> Result<()> {
     st.aptx_active = d.active_mode();
     st.hfp = Some(d.get(Setting::Hfp)? == 1);
     st.auto_hfp = Some(d.get(Setting::AutoHfp)? == 1);
+    // The BT-W5 rejects these reads.
+    st.le_audio = d.get(Setting::BtMode).ok().map(|v| v == BT_MODE_LE_AUDIO);
+    st.gmap = match st.le_audio {
+        Some(_) => Some(d.get(Setting::Gmap)? == 1),
+        None => None,
+    };
     st.paired = d.paired()?;
     if st.connected().is_some() {
         st.pairing = false;
@@ -469,6 +505,19 @@ fn apply(d: &Dongle, st: &mut State, cmd: Cmd) -> Result<Option<String>> {
             return Ok(Some("Restarting the dongle…".into()));
         }
         Cmd::SetAutoHfp(on) => d.set(Setting::AutoHfp, on as u8)?,
+        Cmd::SetLeAudio(on) => {
+            d.set(Setting::BtMode, if on { BT_MODE_LE_AUDIO } else { BT_MODE_CLASSIC })?;
+            if st.connected().is_some() {
+                return Ok(Some("Reconnecting the headset…".into()));
+            }
+        }
+        Cmd::SetGmap(on) => d.set_gmap(on)?,
+        Cmd::SetBroadcast(on) => {
+            // One frame starts and stops it, so only send it when the state differs.
+            if d.connection()?.is_broadcasting() != on {
+                d.toggle_broadcast()?;
+            }
+        }
         Cmd::Disconnect => d.disconnect()?,
         Cmd::Pair => {
             d.disconnect()?;

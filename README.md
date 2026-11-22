@@ -2,7 +2,7 @@
 
 Command-line tool and tray icon for the Creative BT-W5 and BT-W6 Bluetooth audio dongles: switch aptX Adaptive between low latency and high quality, toggle HFP, list and manage pairings, and pair new headsets. No Creative app needed.
 
-It goes through the OS HID driver, hidraw on Linux, so the dongle's media keys keep working. The original Python script detaches that driver instead. The protocol comes from the USB capture in [RaphaelWimmer/btw5-switch](https://github.com/RaphaelWimmer/btw5-switch). Every command except the HFP on/off switch has run on a BT-W5. That switch follows the capture byte for byte. On a BT-W6 I've run status, scan, connect, mode and the tray.
+It goes through the OS HID driver, hidraw on Linux, so the dongle's media keys keep working. The original Python script detaches that driver instead. The protocol comes from the USB capture in [RaphaelWimmer/btw5-switch](https://github.com/RaphaelWimmer/btw5-switch). Every command has run on a BT-W5. On a BT-W6 I've run status, scan, connect, mode, the tray and the W6-only commands below.
 
 ## Supported dongles
 
@@ -27,7 +27,7 @@ sudo udevadm trigger --subsystem-match=hidraw --action=change
 
 ## Tray icon
 
-`bt-w tray` puts a headphones icon in the system tray. Its colour follows the dongle's LED: cyan for low latency, purple for high quality, blue while pairing, grey with no headset connected. Click it for a menu with the aptX mode, the HFP switches, your paired headsets (click one to switch to it), "Pair new headset…" and Disconnect.
+`bt-w tray` puts a headphones icon in the system tray. Its colour follows the dongle's LED: cyan for low latency, purple for high quality, blue while pairing, grey with no headset connected. Click it for a menu with the aptX mode, the HFP switches, your paired headsets (click one to switch to it), "Pair new headset…" and Disconnect. On a BT-W6 it also has LE Audio, GMAP and broadcast switches.
 
 The icon updates as soon as the dongle reports a change, including presses of its own button and headsets turning off. It needs a panel that supports StatusNotifierItem, which covers KDE Plasma and most others. GNOME needs the AppIndicator extension. The tray is Linux only, while the CLI also builds on macOS and Windows.
 
@@ -60,6 +60,11 @@ Paired:      2 of 4 slots
 | `bt-w mode ll` / `bt-w mode hq` | aptX Adaptive mode. The LED turns cyan for low latency and purple for high quality. Needs a connected headset. |
 | `bt-w hfp on` / `off` | Hands-free profile, which enables the headset mic. The dongle restarts. |
 | `bt-w auto-hfp on` / `off` | Switch to HFP when an app opens the mic. |
+| `bt-w le-audio on` / `off` | BT-W6: prefer LE Audio (LC3) over Bluetooth Classic for headsets that do both. The headset reconnects. aptX needs Classic. |
+| `bt-w gmap on` / `off` | BT-W6: Gaming Audio Profile, low latency over LE Audio. |
+| `bt-w broadcast on` / `off` | BT-W6: LE Audio broadcast to any number of headsets. Starting it drops the connected headset. |
+| `bt-w broadcast name NAME` | BT-W6: name listeners see, `BT-W6 00` by default. |
+| `bt-w broadcast encrypt on` / `off`, `bt-w broadcast code CODE` | BT-W6: require a 4 to 16 character code to listen. The default code is `000000`. |
 | `bt-w paired` | List paired headsets. |
 | `bt-w scan [--secs 30] [--connect NAME\|ADDR]` | Disconnect, enter pairing mode and list headsets in range. `--connect` pairs with one as soon as it shows up. |
 | `bt-w connect ADDR` | Connect to a headset. |
@@ -107,19 +112,28 @@ Each setting has a write ID, and its read ID is the write ID plus 5.
 | HFP | `01` | `06` | 1 on, 2 off |
 | Auto HFP | `02` | `07` | 1 on, 0 off |
 | aptX Adaptive mode | `03` | `08` | `20` low latency, `40` high quality |
+| BT-W6: Bluetooth mode | `06` | `0d` | `00` Classic, `02` LE Audio |
+| BT-W6: GMAP | `07` | `0f` | 1 on, 0 off |
+| BT-W6: broadcast encryption | `08` | `10` | 1 on, 0 off |
+| BT-W6: broadcast name | `04` | `09` | counted string |
+| BT-W6: broadcast code | `05` | `0a` | counted string |
 
 Read ID `01` returns the number of pairing slots, 4 on this unit, and `6b 01` returns how many are in use. Read ID `03` returns the aptX mode running on the current link, and the dongle rejects it when nothing is connected. I don't know what `00`, `02`, `04` and `05` mean.
 
-The BT-W6 differs in a few places:
+The BT-W6 rows come from a USB capture of Creative's app. Its write IDs don't follow the plus-5 rule. The W6 also differs from the W5 in other ways:
 
-- It rejects read ID `03` even with a headset connected. Read ID `0c` holds the active mode instead (`20 00 00 00` or `40 00 00 00`), and the dongle sends it unprompted after a connect. bt-w tries `03` first, then `0c`.
+- It rejects read ID `03` even with a headset connected. Read ID `0c` holds the active mode instead (`20 00 00 00` or `40 00 00 00`, and `00 02 00 00` over LE Audio), and the dongle sends it unprompted after a connect. bt-w tries `03` first, then `0c`.
 - An unused pairing slot gets a `80` rejection rather than an empty slot.
 - The idle connection state carries an all-zero address.
-- It has more read IDs. `09` is the dongle's Bluetooth name as a counted string (`BT-W6 00`) and `0a` is its PIN (`000000`). `0e` reads `07 40 00 00` with the Ace 2 connected in both aptX modes and is rejected when idle, so it may describe the link or the headset. `0b` (`f5 03 00 00`), `0d` (`00`), `0f` (`00 00`) and `10` (`00`) don't change with the aptX mode. Two of these are probably the aptX Lossless and LE Audio switches. I haven't written to any of them, since I don't know what a write would do. A capture from Creative's app would settle it.
+- The broadcast name and code writes get no ack. bt-w reads them back to confirm.
+- The GMAP write sometimes gets no reply, or a reply with the old value, and the change lands up to a second later. Writing `01` while GMAP is already on turns it off. bt-w only writes when the value differs and then polls.
+- `6b 0a 01 08` starts the LE Audio broadcast, and the same frame stops it. The app sends it for both. While broadcasting, the connection state is `10` with no headset.
+- After I stopped a broadcast, the dongle sat in connection state `03` and didn't page the Ace 2, and `bt-w connect` failed too. The headset only came back after a trip to its charging case. The Bluetooth mode also read Classic again afterwards, although it was LE Audio before the broadcast.
+- Read ID `0e` reads `07 40 00 00` whenever a headset is connected, over Classic or LE Audio, and is rejected when idle. `0b` reads `f5 03 00 00`. I don't know what either means.
 
-The dongle has no codec query. `Protocol:` is derived from the connection state and read ID `03`. Call mode means HFP. In music mode, a value in `03` means aptX Adaptive. Without one, the codec is aptX HD, aptX or SBC, and the tool can't tell which.
+The dongle has no codec query. `Protocol:` is derived from the connection state and the active mode. Call mode means HFP, and state `0e` means LE Audio with LC3, which is what Creative's app shows for it. In music mode, a value in `03` means aptX Adaptive. Without one, the codec is aptX HD, aptX or SBC, and the tool can't tell which.
 
-Connection state `06` means paging. The dongle cycles through its paired headsets trying to reconnect, and the LED blinks white. A headset that connects produces `08`, followed by `0b` in music mode (A2DP) or `0c` in call mode (HFP, LED red). A disconnect produces `07`, then `0a` as the dongle starts pairing mode.
+Connection state `06` means paging. The dongle cycles through its paired headsets trying to reconnect, and the LED blinks white. A headset that connects produces `08`, followed by `0b` in music mode (A2DP), `0c` in call mode (HFP, LED red) or, on the BT-W6, `0e` over LE Audio. A disconnect produces `07`, then `0a` as the dongle starts pairing mode.
 
 If you write the aptX mode while no headset is connected, the dongle acks it and then falls back to high quality. `bt-w mode` refuses to run in that state for this reason.
 

@@ -33,6 +33,15 @@ enum Cmd {
     Hfp { state: OnOff },
     /// Switch to HFP automatically when an app opens the microphone.
     AutoHfp { state: OnOff },
+    /// BT-W6: prefer LE Audio over Bluetooth Classic for headsets that do both. The headset reconnects.
+    LeAudio { state: OnOff },
+    /// BT-W6: Gaming Audio Profile, low latency over LE Audio.
+    Gmap { state: OnOff },
+    /// BT-W6: LE Audio broadcast, for any number of listening headsets.
+    Broadcast {
+        #[command(subcommand)]
+        action: BroadcastCmd,
+    },
     /// List paired headsets.
     Paired,
     /// Disconnect the headset, enter pairing mode and list devices in range.
@@ -64,6 +73,20 @@ enum Cmd {
         #[arg(required = true)]
         bytes: Vec<String>,
     },
+}
+
+#[derive(Subcommand)]
+enum BroadcastCmd {
+    /// Start broadcasting. The connected headset is dropped.
+    On,
+    /// Stop broadcasting; the dongle reconnects to its paired headsets.
+    Off,
+    /// Set the broadcast name listeners see.
+    Name { name: String },
+    /// Require the broadcast code to listen.
+    Encrypt { state: OnOff },
+    /// Set the broadcast code.
+    Code { code: String },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -103,8 +126,12 @@ fn main() -> Result<()> {
             };
             // While no headset is connected the dongle accepts the write, then falls
             // back to high quality, so only switch over a live link.
-            if !d.connection()?.is_connected() {
+            let c = d.connection()?;
+            if !c.is_connected() {
                 bail!("no headset connected; connect one first (the dongle drops the mode otherwise)");
+            }
+            if c.is_le_audio() {
+                bail!("the headset is on LE Audio; aptX needs Bluetooth Classic (`bt-w le-audio off`)");
             }
             d.set(Setting::AptxMode, v)?;
             // The link renegotiates; wait for the active mode to follow.
@@ -141,6 +168,32 @@ fn main() -> Result<()> {
             println!("Auto HFP: {}", on_off(d.get(Setting::AutoHfp)? == 1));
             Ok(())
         }
+        Cmd::LeAudio { state } => {
+            let v = if matches!(state, OnOff::On) { BT_MODE_LE_AUDIO } else { BT_MODE_CLASSIC };
+            if d.get(Setting::BtMode)? == v {
+                println!("Bluetooth mode is already {}", bt_mode_name(v));
+                return Ok(());
+            }
+            d.set(Setting::BtMode, v)?;
+            println!("Bluetooth mode: {}. Reconnecting the headset...", bt_mode_name(v));
+            // `08` (connected) comes first; wait for the profile state that follows it.
+            // Without a reconnect within the timeout, the link may simply not have changed.
+            let e = match wait_for(&d, Duration::from_secs(15), |e| e.is_connected() && e.state != 0x08)? {
+                Some(e) => e,
+                None => d.connection()?,
+            };
+            match link_description(&e, d.active_mode()) {
+                Some(link) => println!("Protocol:    {link}"),
+                None => eprintln!("The headset has not reconnected yet."),
+            }
+            Ok(())
+        }
+        Cmd::Gmap { state } => {
+            d.set_gmap(matches!(state, OnOff::On))?;
+            println!("GMAP: {}", on_off(d.get(Setting::Gmap)? == 1));
+            Ok(())
+        }
+        Cmd::Broadcast { action } => broadcast(&d, action),
         Cmd::Paired => {
             print_paired(&d.paired()?);
             Ok(())
@@ -183,6 +236,68 @@ fn aptx_name(v: u8) -> String {
     }
 }
 
+fn bt_mode_name(v: u8) -> String {
+    match v {
+        BT_MODE_CLASSIC => "Classic".into(),
+        BT_MODE_LE_AUDIO => "LE Audio".into(),
+        v => format!("unknown (0x{v:02x})"),
+    }
+}
+
+/// Read events until one matches `done`, or `timeout` passes.
+fn wait_for(d: &Dongle, timeout: Duration, done: impl Fn(&ConnEvent) -> bool) -> Result<Option<ConnEvent>> {
+    let deadline = Instant::now() + timeout;
+    while let Some(f) = d.recv(deadline.saturating_duration_since(Instant::now()))? {
+        if let Some(e) = ConnEvent::parse(&f)
+            && done(&e)
+        {
+            return Ok(Some(e));
+        }
+    }
+    Ok(None)
+}
+
+fn broadcast(d: &Dongle, action: BroadcastCmd) -> Result<()> {
+    match action {
+        BroadcastCmd::On | BroadcastCmd::Off => {
+            let on = matches!(action, BroadcastCmd::On);
+            if d.connection()?.is_broadcasting() == on {
+                println!("Broadcast already {}", on_off(on));
+                return Ok(());
+            }
+            d.toggle_broadcast()?;
+            if wait_for(d, Duration::from_secs(10), |e| e.is_broadcasting() == on)?.is_none() {
+                bail!("the dongle did not {} the broadcast", if on { "start" } else { "stop" });
+            }
+            if on {
+                println!("Broadcasting as {:?}.", d.get_text(TextSetting::BroadcastName)?);
+            } else {
+                println!("Broadcast off; the dongle is reconnecting to its paired headsets.");
+            }
+        }
+        BroadcastCmd::Name { name } => {
+            if name.is_empty() || name.len() > 32 || !name.is_ascii() {
+                bail!("the name must be 1 to 32 ASCII characters");
+            }
+            d.set_text(TextSetting::BroadcastName, &name)?;
+            println!("Broadcast name: {name:?}");
+        }
+        BroadcastCmd::Encrypt { state } => {
+            d.set(Setting::BroadcastEncrypt, matches!(state, OnOff::On) as u8)?;
+            println!("Broadcast encryption: {}", on_off(d.get(Setting::BroadcastEncrypt)? == 1));
+        }
+        BroadcastCmd::Code { code } => {
+            // LE Audio broadcast codes are at most 16 bytes.
+            if code.len() < 4 || code.len() > 16 || !code.is_ascii() {
+                bail!("the code must be 4 to 16 ASCII characters");
+            }
+            d.set_text(TextSetting::BroadcastCode, &code)?;
+            println!("Broadcast code set.");
+        }
+    }
+    Ok(())
+}
+
 fn status(d: &Dongle) -> Result<()> {
     let note = if d.tested { "" } else { " (untested model)" };
     println!("Model:       Creative {}{note}", d.model);
@@ -205,6 +320,18 @@ fn status(d: &Dongle) -> Result<()> {
     let hfp = d.get(Setting::Hfp)?;
     println!("HFP:         {}", if hfp == 1 { "allowed" } else { "off" });
     println!("Auto HFP:    {}", on_off(d.get(Setting::AutoHfp)? == 1));
+    // BT-W6 only: the BT-W5 rejects these reads.
+    if let Ok(mode) = d.get(Setting::BtMode) {
+        println!("Bluetooth:   {} preferred", bt_mode_name(mode));
+        println!("GMAP:        {}", on_off(d.get(Setting::Gmap)? == 1));
+        let name = d.get_text(TextSetting::BroadcastName)?;
+        let encrypted = d.get(Setting::BroadcastEncrypt)? == 1;
+        println!(
+            "Broadcast:   {}, name {name:?}, {}",
+            on_off(c.is_broadcasting()),
+            if encrypted { "encrypted" } else { "unencrypted" }
+        );
+    }
     print_paired(&d.paired()?);
     Ok(())
 }

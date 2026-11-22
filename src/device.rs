@@ -159,6 +159,51 @@ impl Dongle {
             .ok_or_else(|| anyhow!("empty reply for {s:?}"))
     }
 
+    /// GMAP (BT-W6). Writing 1 while GMAP is already on turns it off, and the reply is
+    /// sometimes the old value or missing, so skip no-op writes and poll for the result.
+    pub fn set_gmap(&self, on: bool) -> Result<()> {
+        let is_on = |d: &Self| -> Result<bool> { Ok(d.get(Setting::Gmap)? == 1) };
+        if is_on(self)? == on {
+            return Ok(());
+        }
+        self.send(&Frame::new(CMD_BT, &[BT_SET, Setting::Gmap.set_id(), on as u8]))?;
+        let deadline = Instant::now() + Duration::from_secs(4);
+        while Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(250));
+            if is_on(self)? == on {
+                return Ok(());
+            }
+        }
+        bail!("the dongle did not turn GMAP {}", if on { "on" } else { "off" })
+    }
+
+    /// Value of a string setting (BT-W6 broadcast name and code).
+    pub fn get_text(&self, s: TextSetting) -> Result<String> {
+        let v = self.get_param(s.get_id())?;
+        Ok(counted_str(&v).map(|(t, _)| t).unwrap_or_default())
+    }
+
+    /// Write a string setting. The dongle doesn't ack these, so read it back.
+    pub fn set_text(&self, s: TextSetting, text: &str) -> Result<()> {
+        let mut p = vec![BT_SET, s.set_id(), text.len() as u8];
+        p.extend_from_slice(text.as_bytes());
+        self.send(&Frame::new(CMD_BT, &p))?;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(100));
+            if self.get_text(s)? == text {
+                return Ok(());
+            }
+        }
+        bail!("the dongle did not take the new {s:?}")
+    }
+
+    /// Start or stop the LE Audio broadcast (BT-W6). Both use the same toggle frame, so
+    /// check the connection state first.
+    pub fn toggle_broadcast(&self) -> Result<()> {
+        self.send(&Frame::new(CMD_BT, &BROADCAST_TOGGLE))
+    }
+
     /// aptX Adaptive mode running on the current link. The BT-W5 reports it in
     /// param 0x03, the BT-W6 in 0x0c (it rejects 0x03). None when no headset is
     /// connected: both dongles reject the read then.
@@ -168,8 +213,20 @@ impl Dongle {
             .find_map(|id| self.get_param(id).ok()?.first().copied())
     }
 
+    /// Write a setting. Most writes get an ack; some BT-W6 ones (GMAP) only get the new
+    /// value pushed back as a `6b 09 <get id> <value>` frame, which counts too.
     pub fn set(&self, s: Setting, value: u8) -> Result<()> {
-        self.command(CMD_BT, &[BT_SET, s.set_id(), value])
+        let req = Frame::new(CMD_BT, &[BT_SET, s.set_id(), value]);
+        let status = self.request(&req, |f| {
+            f.ack()
+                .filter(|a| a.0 == CMD_BT)
+                .map(|a| a.1)
+                .or_else(|| f.bt(BT_GET).filter(|p| p.first() == Some(&s.get_id())).map(|_| 0))
+        })?;
+        if status != 0 {
+            bail!("dongle rejected [{}]: status 0x{status:02x}", hex(&req.payload));
+        }
+        Ok(())
     }
 
     /// Current connection state. A connected dongle answers with `08` and then the

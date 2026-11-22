@@ -31,15 +31,24 @@ pub const BT_FORGET: u8 = 0x07;
 pub const BT_GET: u8 = 0x09;
 pub const BT_SET: u8 = 0x0a;
 
-/// A setting is written with its `set` id and read back with `set + 5`.
+/// One-byte settings, written with `6b 0a <set id> <value>` and read with `6b 09 <get id>`.
+/// The BT-W5 settings read back at `set + 5`; the BT-W6-only ones don't follow that rule.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Setting {
     /// Hands-free profile (headset mic). 1 = on, 2 = off. Changing it reboots the dongle.
     Hfp,
     /// Automatically switch to HFP when an app opens the mic. 1 = on, 0 = off.
     AutoHfp,
-    /// aptX Adaptive mode. 0x20 = low latency, 0x40 = high quality.
+    /// aptX Adaptive mode. 0x20 = low latency, 0x40 = high quality (aptX Lossless on
+    /// headsets that support it).
     AptxMode,
+    /// BT-W6: preferred mode for headsets that do both. See `BT_MODE_*`. The headset
+    /// reconnects after a change.
+    BtMode,
+    /// BT-W6: Gaming Audio Profile, low latency over LE Audio. 1 = on, 0 = off.
+    Gmap,
+    /// BT-W6: encrypt the LE Audio broadcast with the broadcast code. 1 = on, 0 = off.
+    BroadcastEncrypt,
 }
 
 impl Setting {
@@ -48,12 +57,49 @@ impl Setting {
             Setting::Hfp => 0x01,
             Setting::AutoHfp => 0x02,
             Setting::AptxMode => 0x03,
+            Setting::BtMode => 0x06,
+            Setting::Gmap => 0x07,
+            Setting::BroadcastEncrypt => 0x08,
+        }
+    }
+    pub fn get_id(self) -> u8 {
+        match self {
+            Setting::BtMode => 0x0d,
+            Setting::Gmap => 0x0f,
+            Setting::BroadcastEncrypt => 0x10,
+            s => s.set_id() + 5,
+        }
+    }
+}
+
+pub const BT_MODE_CLASSIC: u8 = 0x00;
+pub const BT_MODE_LE_AUDIO: u8 = 0x02;
+
+/// BT-W6 string settings, written as `6b 0a <set id> <len> <text>`. The dongle doesn't
+/// ack these writes; read them back to confirm.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextSetting {
+    /// Name of the LE Audio broadcast ("BT-W6 00" by default).
+    BroadcastName,
+    /// Code listeners need when the broadcast is encrypted ("000000" by default).
+    BroadcastCode,
+}
+
+impl TextSetting {
+    pub fn set_id(self) -> u8 {
+        match self {
+            TextSetting::BroadcastName => 0x04,
+            TextSetting::BroadcastCode => 0x05,
         }
     }
     pub fn get_id(self) -> u8 {
         self.set_id() + 5
     }
 }
+
+/// BT-W6: `6b 0a 01 08` toggles LE Audio broadcast. Creative's app sends the same frame to
+/// start and to stop it; connection state 0x10 means broadcasting.
+pub const BROADCAST_TOGGLE: [u8; 3] = [BT_SET, 0x01, 0x08];
 
 pub const APTX_LOW_LATENCY: u8 = 0x20;
 pub const APTX_HIGH_QUALITY: u8 = 0x40;
@@ -156,7 +202,7 @@ impl std::str::FromStr for BdAddr {
 }
 
 /// `<len> <bytes[len]>`, NUL padded. Returns the string and the bytes after the field.
-fn counted_str(b: &[u8]) -> Option<(String, &[u8])> {
+pub fn counted_str(b: &[u8]) -> Option<(String, &[u8])> {
     let n = *b.first()? as usize;
     let field = b.get(1..1 + n).unwrap_or(&b[1..]);
     let rest = b.get(1 + n..).unwrap_or(&[]);
@@ -195,6 +241,8 @@ impl ConnEvent {
     /// - 0x08: connected. Always followed by the active profile:
     /// - 0x0b: music (A2DP, aptX). The mic sends nothing in this mode.
     /// - 0x0c: call mode (HFP, LED red). Mic audio flows, playback is voice quality.
+    /// - 0x0e: BT-W6, connected over LE Audio (LC3).
+    /// - 0x10, no peer: BT-W6, LE Audio broadcast running.
     pub fn describe(&self) -> &'static str {
         match self.state {
             0x07 => "idle",
@@ -202,30 +250,43 @@ impl ConnEvent {
             0x06 => "searching",
             0x08 | 0x0b => "connected",
             0x0c => "connected, call mode",
+            0x0e => "connected, LE Audio",
+            0x10 => "broadcasting",
             _ => "unknown",
         }
     }
 
     pub fn is_connected(&self) -> bool {
-        matches!(self.state, 0x08 | 0x0b | 0x0c) && self.peer.is_some()
+        matches!(self.state, 0x08 | 0x0b | 0x0c | 0x0e) && self.peer.is_some()
     }
 
     pub fn in_call(&self) -> bool {
         self.state == 0x0c
     }
+
+    pub fn is_le_audio(&self) -> bool {
+        self.state == 0x0e
+    }
+
+    pub fn is_broadcasting(&self) -> bool {
+        self.state == 0x10
+    }
 }
 
 /// Bluetooth profile and codec on the current link, for display.
 ///
-/// The dongle has no codec query. Call mode is state 0x0c; in music mode an aptX
-/// Adaptive link reports its mode (read ID 0x03). Without one the codec is aptX HD,
-/// aptX or SBC, and the dongle doesn't say which.
+/// The dongle has no codec query. Call mode is state 0x0c and LE Audio is 0x0e. In music
+/// mode an aptX Adaptive link reports its mode (read ID 0x03, or 0x0c on the BT-W6).
+/// Without one the codec is aptX HD, aptX or SBC, and the dongle doesn't say which.
 pub fn link_description(conn: &ConnEvent, active_mode: Option<u8>) -> Option<String> {
     if !conn.is_connected() {
         return None;
     }
     if conn.in_call() {
         return Some("HFP (call audio, mic on)".into());
+    }
+    if conn.is_le_audio() {
+        return Some("LE Audio, LC3".into());
     }
     Some(match active_mode {
         Some(APTX_LOW_LATENCY) => "A2DP, aptX Adaptive low latency".into(),
@@ -364,13 +425,23 @@ mod tests {
         let e = ConnEvent::parse(&f).unwrap();
         assert_eq!((e.state, &e.peer), (0x07, &None));
         assert_eq!(e.describe(), "idle");
+
+        // BT-W6: LE Audio link, and broadcast with an all-zero address.
+        let f = Frame::decode(&report("035a6b29060e88776655000220")).unwrap();
+        let e = ConnEvent::parse(&f).unwrap();
+        assert!(e.is_connected() && e.is_le_audio());
+        let f = Frame::decode(&report("035a6b290610000000000000")).unwrap();
+        let e = ConnEvent::parse(&f).unwrap();
+        assert!(e.is_broadcasting() && e.peer.is_none() && !e.is_connected());
     }
 
     #[test]
     fn link() {
         let peer = Some(("02:00:11:22:33:44".parse().unwrap(), "Ace".to_string()));
         let music = ConnEvent { state: 0x0b, peer: peer.clone() };
-        let call = ConnEvent { state: 0x0c, peer };
+        let call = ConnEvent { state: 0x0c, peer: peer.clone() };
+        let le = ConnEvent { state: 0x0e, peer };
+        assert_eq!(link_description(&le, Some(0x00)).unwrap(), "LE Audio, LC3");
         assert_eq!(link_description(&music, Some(0x20)).unwrap(), "A2DP, aptX Adaptive low latency");
         assert!(link_description(&music, None).unwrap().contains("not reported"));
         assert!(link_description(&call, Some(0x20)).unwrap().starts_with("HFP"));
@@ -412,5 +483,11 @@ mod tests {
         assert_eq!(Setting::Hfp.get_id(), 0x06);
         assert_eq!(Setting::AutoHfp.get_id(), 0x07);
         assert_eq!(Setting::AptxMode.get_id(), 0x08);
+        // BT-W6, from a capture of Creative's app.
+        assert_eq!((Setting::BtMode.set_id(), Setting::BtMode.get_id()), (0x06, 0x0d));
+        assert_eq!((Setting::Gmap.set_id(), Setting::Gmap.get_id()), (0x07, 0x0f));
+        assert_eq!((Setting::BroadcastEncrypt.set_id(), Setting::BroadcastEncrypt.get_id()), (0x08, 0x10));
+        assert_eq!(TextSetting::BroadcastName.get_id(), 0x09);
+        assert_eq!(TextSetting::BroadcastCode.get_id(), 0x0a);
     }
 }
